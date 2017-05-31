@@ -1,0 +1,30 @@
+#######################################
+# Syntax Coloring Map SD
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+ADS1299	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+WAKEUP      KEYWORD2
+STANDBY     KEYWORD2
+RESET       KEYWORD2
+START       KEYWORD2
+STOP        KEYWORD2
+RDATAC      KEYWORD2
+SDATAC      KEYWORD2
+RDATA       KEYWORD2
+RREG        KEYWORD2
+WREG        KEYWORD2
+transfer    KEYWORD2
+updateData  KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
