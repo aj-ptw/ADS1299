@@ -11,7 +11,7 @@ void ADS1299::setup(int _DRDY, int _CS){
   setup(_DRDY, _CS, false);
 }
 
-void ADS1299::setup(int _DRDY, int _CS, boolean verbose){
+void ADS1299::setup(int _DRDY, int _CS, boolean _verbose){
 
   // **** ----- SPI Setup ----- **** //
 
@@ -21,7 +21,9 @@ void ADS1299::setup(int _DRDY, int _CS, boolean verbose){
   // a general purpose output port (it doesn't influence
   // SPI operations).
   //
-  verbose = verbose;
+  verbose = _verbose;
+
+  Serial.println("setup");
 
   SPI.begin();
 
@@ -34,7 +36,7 @@ void ADS1299::setup(int _DRDY, int _CS, boolean verbose){
   digitalWrite(SS, HIGH);
 
   SPI.setDataMode(SPI_MODE1);
-  SPI.setFrequency(4000000);
+  SPI.setClockDivider(SPI_CLOCK_DIV2);
   SPI.setBitOrder(MSBFIRST);
 
   // **** ----- End of SPI Setup ----- **** //
@@ -42,7 +44,6 @@ void ADS1299::setup(int _DRDY, int _CS, boolean verbose){
   // initalize the  data ready and chip select pins:
   DRDY = _DRDY;
   CS = _CS;
-  pinMode(DRDY, INPUT);
   pinMode(CS, OUTPUT);
 
   tCLK = 0.000666; //666 ns (Datasheet, pg. 8)
@@ -51,6 +52,245 @@ void ADS1299::setup(int _DRDY, int _CS, boolean verbose){
   lastSerialPrint = 0;
   counter = 0;
   serialPrintInterval = 10;
+
+  initialize_ads();
+}
+
+void ADS1299::activateChannel(byte N)
+{
+  byte setting, startChan, endChan, targetSS;
+
+  startChan = 8; endChan = 16;
+
+  N = constrain(N-1,startChan,endChan-1);  // 0-7 or 8-15
+
+  SDATAC();  // exit Read Data Continuous mode to communicate with ADS
+  setting = 0x00;
+  //  channelSettings[N][POWER_DOWN] = NO; // keep track of channel on/off in this array  REMOVE?
+  setting |= channelSettings[N][GAIN_SET]; // gain
+  setting |= channelSettings[N][INPUT_TYPE_SET]; // input code
+  if(useSRB2[N] == true){channelSettings[N][SRB2_SET] = YES;}else{channelSettings[N][SRB2_SET] = NO;}
+  if(channelSettings[N][SRB2_SET] == YES) {bitSet(setting,3);} // close this SRB2 switch
+  WREG(CH1SET+(N-startChan),setting);
+  // add or remove from inclusion in BIAS generation
+  if(useInBias[N]){channelSettings[N][BIAS_SET] = YES;}else{channelSettings[N][BIAS_SET] = NO;}
+  setting = RREG(BIAS_SENSP);       //get the current P bias settings
+  if(channelSettings[N][BIAS_SET] == YES){
+    bitSet(setting,N-startChan);    //set this channel's bit to add it to the bias generation
+    useInBias[N] = true;
+  }else{
+    bitClear(setting,N-startChan);  // clear this channel's bit to remove from bias generation
+    useInBias[N] = false;
+  }
+  WREG(BIAS_SENSP,setting); delay(1); //send the modified byte back to the ADS
+  setting = RREG(BIAS_SENSN);       //get the current N bias settings
+  if(channelSettings[N][BIAS_SET] == YES){
+    bitSet(setting,N-startChan);    //set this channel's bit to add it to the bias generation
+  }else{
+    bitClear(setting,N-startChan);  // clear this channel's bit to remove from bias generation
+  }
+  WREG(BIAS_SENSN,setting); delay(1); //send the modified byte back to the ADS
+
+  setting = 0x00;
+  if(boardUseSRB1 == true) setting = 0x20;
+  WREG(MISC1,setting);     // close all SRB1 swtiches
+}
+
+//  deactivate the given channel.
+void ADS1299::deactivateChannel(byte N) {
+  byte setting;
+  byte startChan = 0;
+  byte endChan = 8;
+
+  SDATAC(); delay(1);      // exit Read Data Continuous mode to communicate with ADS
+  N = constrain(N-1,startChan,endChan-1);  //subtracts 1 so that we're counting from 0, not 1
+
+  setting = RREG(CH1SET+(N-startChan)); delay(1); // get the current channel settings
+  bitSet(setting,7);     // set bit7 to shut down channel
+  bitClear(setting,3);   // clear bit3 to disclude from SRB2 if used
+  WREG(CH1SET+(N-startChan),setting); delay(1);     // write the new value to disable the channel
+
+  //remove the channel from the bias generation...
+  setting = RREG(BIAS_SENSP); delay(1); //get the current bias settings
+  bitClear(setting,N-startChan);                  //clear this channel's bit to remove from bias generation
+  WREG(BIAS_SENSP,setting); delay(1);   //send the modified byte back to the ADS
+
+  setting = RREG(BIAS_SENSN); delay(1); //get the current bias settings
+  bitClear(setting,N-startChan);                  //clear this channel's bit to remove from bias generation
+  WREG(BIAS_SENSN,setting); delay(1);   //send the modified byte back to the ADS
+
+  leadOffSettings[N][0] = leadOffSettings[N][1] = NO;
+  changeChannelLeadOffDetect(N+1);
+}
+
+// change the lead off detect settings for all channels
+void ADS1299::changeChannelLeadOffDetect()
+{
+  byte setting, startChan, endChan;
+
+  startChan = 0; endChan = 8;
+
+  SDATAC(); delay(1);      // exit Read Data Continuous mode to communicate with ADS
+  byte P_setting = RREG(LOFF_SENSP);
+  byte N_setting = RREG(LOFF_SENSN);
+
+  for(int i=startChan; i<endChan; i++){
+    if(leadOffSettings[i][PCHAN] == ON){
+      bitSet(P_setting,i-startChan);
+    }else{
+      bitClear(P_setting,i-startChan);
+    }
+    if(leadOffSettings[i][NCHAN] == ON){
+      bitSet(N_setting,i-startChan);
+    }else{
+      bitClear(N_setting,i-startChan);
+    }
+    WREG(LOFF_SENSP,P_setting);
+    WREG(LOFF_SENSN,N_setting);
+  }
+}
+
+// change the lead off detect settings for specified channel
+void ADS1299::changeChannelLeadOffDetect(byte N)
+{
+  byte setting, startChan, endChan;
+
+  startChan = 0; endChan = 8;
+
+  N = constrain(N-1,startChan,endChan-1);
+  SDATAC(); delay(1);      // exit Read Data Continuous mode to communicate with ADS
+  byte P_setting = RREG(LOFF_SENSP);
+  byte N_setting = RREG(LOFF_SENSN);
+
+  if(leadOffSettings[N][PCHAN] == ON){
+    bitSet(P_setting,N-startChan);
+  }else{
+    bitClear(P_setting,N-startChan);
+  }
+  if(leadOffSettings[N][NCHAN] == ON){
+    bitSet(N_setting,N-startChan);
+  }else{
+    bitClear(N_setting,N-startChan);
+  }
+  WREG(LOFF_SENSP,P_setting);
+  WREG(LOFF_SENSN,N_setting);
+}
+
+void ADS1299::initialize_ads() {
+  Serial.println("initialize_ads");
+  // recommended power up sequence requiers >Tpor (~32mS)
+  delay(50);
+  pinMode(ADS_RST,OUTPUT);
+  digitalWrite(ADS_RST,LOW);  // reset pin connected to both ADS ICs
+  delayMicroseconds(4);   // toggle reset pin
+  digitalWrite(ADS_RST,HIGH); // this will reset the Daisy if it is present
+  delayMicroseconds(20);  // recommended to wait 18 Tclk before using device (~8uS);
+  // initalize the  data ready chip select and reset pins:
+  pinMode(DRDY, INPUT); // we get DRDY asertion from the on-board ADS
+  delay(40);
+  resetADS(); // reset the on-board ADS registers, and stop DataContinuousMode
+  delay(10);
+  WREG(CONFIG1,(ADS1299_CONFIG1_DAISY_NOT | curSampleRate)); // turn off clk output if no daisy present
+  numChannels = 8;    // expect up to 8 ADS channels
+  delay(40);
+
+  // DEFAULT CHANNEL SETTINGS FOR ADS
+  defaultChannelSettings[POWER_DOWN] = NO;        // on = NO, off = YES
+  defaultChannelSettings[GAIN_SET] = ADS_GAIN24;     // Gain setting
+  defaultChannelSettings[INPUT_TYPE_SET] = ADSINPUT_NORMAL;// input muxer setting
+  defaultChannelSettings[BIAS_SET] = YES;    // add this channel to bias generation
+  defaultChannelSettings[SRB2_SET] = YES;       // connect this P side to SRB2
+  defaultChannelSettings[SRB1_SET] = NO;        // don't use SRB1
+
+  for(int i=0; i<numChannels; i++){
+    for(int j=0; j<6; j++){
+      channelSettings[i][j] = defaultChannelSettings[j];  // assign default settings
+    }
+    useInBias[i] = true;    // keeping track of Bias Generation
+    useSRB2[i] = true;      // keeping track of SRB2 inclusion
+  }
+  boardUseSRB1 = false;
+
+  writeChannelSettings(); // write settings to the on-board and on-daisy ADS if present
+
+  WREG(CONFIG3,0b11101100); delay(1);  // enable internal reference drive and etc.
+  for(int i=0; i<numChannels; i++){  // turn off the impedance measure signal
+    leadOffSettings[i][PCHAN] = OFF;
+    leadOffSettings[i][NCHAN] = OFF;
+  }
+
+  streaming = false;
+}
+
+// write settings for ALL 8 channels for a given ADS board
+// channel settings: powerDown, gain, inputType, SRB2, SRB1
+void ADS1299::writeChannelSettings() {
+  boolean use_SRB1 = false;
+  byte setting, startChan, endChan, targetSS;
+
+  startChan = 0; endChan = 8;
+
+  SDATAC(); delay(1);      // exit Read Data Continuous mode to communicate with ADS
+
+  for(byte i=startChan; i<endChan; i++){ // write 8 channel settings
+    setting = 0x00;
+    if(channelSettings[i][POWER_DOWN] == YES){setting |= 0x80;}
+    setting |= channelSettings[i][GAIN_SET]; // gain
+    setting |= channelSettings[i][INPUT_TYPE_SET]; // input code
+    if(channelSettings[i][SRB2_SET] == YES){
+      setting |= 0x08;    // close this SRB2 switch
+      useSRB2[i] = true;  // remember SRB2 state for this channel
+    }else{
+      useSRB2[i] = false; // rememver SRB2 state for this channel
+    }
+    WREG(CH1SET+(i-startChan),setting);  // write this channel's register settings
+
+    // add or remove this channel from inclusion in BIAS generation
+    setting = RREG(BIAS_SENSP);                   //get the current P bias settings
+    if(channelSettings[i][BIAS_SET] == YES){
+      bitSet(setting,i-startChan); useInBias[i] = true;    //add this channel to the bias generation
+    }else{
+      bitClear(setting,i-startChan); useInBias[i] = false; //remove this channel from bias generation
+    }
+    WREG(BIAS_SENSP,setting); delay(1);           //send the modified byte back to the ADS
+
+    setting = RREG(BIAS_SENSN);                   //get the current N bias settings
+    if(channelSettings[i][BIAS_SET] == YES){
+      bitSet(setting,i-startChan);    //set this channel's bit to add it to the bias generation
+    }else{
+      bitClear(setting,i-startChan);  // clear this channel's bit to remove from bias generation
+    }
+    WREG(BIAS_SENSN,setting); delay(1);           //send the modified byte back to the ADS
+
+    if(channelSettings[i][SRB1_SET] == YES){
+      use_SRB1 = true;  // if any of the channel setting closes SRB1, it is closed for all
+    }
+  } // end of CHnSET and BIAS settings
+  if(use_SRB1){
+    for(int i=startChan; i<endChan; i++){
+      channelSettings[i][SRB1_SET] = YES;
+    }
+    WREG(MISC1,0x20);     // close SRB1 swtich
+    boardUseSRB1 = true;
+  }else{
+    for(int i=startChan; i<endChan; i++){
+      channelSettings[i][SRB1_SET] = NO;
+    }
+    WREG(MISC1,0x00);    // open SRB1 switch
+    boardUseSRB1 = false;
+  }
+}
+
+void ADS1299::resetADS() {
+  int startChan = 1;
+  int stopChan = 8;
+  RESET();             // send RESET command to default all registers
+  SDATAC();            // exit Read Data Continuous mode to communicate with ADS
+  delay(100);
+  // turn off all channels
+  for (int chan=startChan; chan <= stopChan; chan++) {
+    deactivateChannel(chan);
+  }
 }
 
 //System Commands

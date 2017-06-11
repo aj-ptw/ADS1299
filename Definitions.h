@@ -9,6 +9,13 @@
 #ifndef _Definitions_h
 #define _Definitions_h
 
+// PIN CONNECTIONS
+#define ADS_RST	2
+#define NUMBER_OF_CHANNELS 8
+#define NUMBER_OF_BOARD_SETTINGS 1
+#define NUMBER_OF_CHANNEL_SETTINGS 6
+#define NUMBER_OF_LEAD_OFF_SETTINGS 2
+#define NUMBER_BYTES_PER_SAMPLE 24
 
 #define SPI_DATA_MODE 0x04 //clock polarity = 0; clock phase = 1 (pg. 8)
 #define SPI_MODE_MASK 0x0C  // CPOL = bit 3, CPHA = bit 2 on SPCR
@@ -122,6 +129,5 @@
 
 #define ADS_BYTES_PER_CHAN 3
 #define ADS_CHANS_PER_BOARD 8
-#define NUMBER_BYTES_PER_SAMPLE 24
 
 #endif
